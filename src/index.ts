@@ -6,58 +6,38 @@
  * GitHub: https://github.com/Effect-TS/effect
  */
 import { NodeRuntime } from '@effect/platform-node';
-import { Effect, Stream, StreamEmit, Chunk, Context } from 'effect';
+import { Effect, Stream, StreamEmit, Chunk, Sink } from 'effect';
 
-/**
- * viem is a TypeScript interface for Ethereum that provides low-level stateless primitives for interacting with Ethereum. viem is focused on developer experience, stability, bundle size, and performance.
- *
- * Getting Started: https://viem.sh/docs/getting-started
- */
-import { createPublicClient, http } from 'viem';
-import { mainnet } from 'viem/chains';
-
-/**
- * Creates a Public Client with a given [Transport](https://viem.sh/docs/clients/intro) configured for a [Chain](https://viem.sh/docs/clients/chains).
- *
- * - Docs: https://viem.sh/docs/clients/public
- *
- * A Public Client is an interface to "public" [JSON-RPC API](https://ethereum.org/en/developers/docs/apis/json-rpc/) methods such as retrieving block numbers, transactions, reading from smart contracts, etc through [Public Actions](/docs/actions/public/introduction).
- */
-const client = createPublicClient({
-  chain: mainnet,
-  transport: http(process.env.ETH_RPC),
-});
-
-/**
- *  Services to provide capabilities that can be shared across modules
- *
- * - Docs: https://effect.website/docs/guides/context-management/services
- */
-export class Blocks extends Context.Tag('Blocks')<
-  Blocks,
-  { readonly stream: Stream.Stream<bigint> }
->() {}
-
-export class EventLogs extends Context.Tag('EventLogs')<
-  EventLogs,
-  { readonly stream: Stream.Stream<any> }
->() {}
+import { Blocks, EventLogs } from './services';
+import * as TransactionLog from './transaction-log';
+import { client } from './viem-client';
 
 /**
  * Write our main program
  *
  * Docs - https://effect.website/docs/guides/essentials/using-generators#understanding-effectgen
  */
-const program = Effect.gen(function* () {
+const program = Effect.gen(function* ($) {
   const blocks = yield* Blocks;
   const logs = yield* EventLogs;
 
-  // merge the streams of each service and filter duplicates
-  // @todo cache https://effect.website/docs/guides/batching-caching#using-cache-directly
-  const stream = Stream.merge(blocks.stream, logs.stream.pipe(Stream.changes));
+  /**
+   * Listen for event logs
+   *
+   * Docs - https://effect.website/docs/guides/streaming/stream/introduction
+   *
+   * @todo cache https://effect.website/docs/guides/batching-caching#using-cache-directly
+   */
+  const listener = logs.stream.pipe(
+    Stream.changes,
+    Stream.tap(({ address, args: { tokenId } }) =>
+      Effect.log(address, tokenId)
+    ),
+    Stream.merge(blocks.stream.pipe(Stream.tap(Effect.log))),
+    Stream.run(Sink.drain)
+  );
 
-  // log each streamed event as it arrives
-  yield* Stream.runForEach(stream, Effect.log);
+  yield* listener;
 });
 
 /**
@@ -86,11 +66,6 @@ const runnable = program.pipe(
   }),
 
   Effect.provideService(EventLogs, {
-    /**
-     * Streams
-     *
-     * Docs - https://effect.website/docs/guides/streaming/stream/introduction
-     */
     stream: Stream.async((emit: StreamEmit.Emit<never, never, any, void>) => {
       /**
        * Watches and returns emitted [Event Logs](https://viem.sh/docs/glossary/terms#event-log).
@@ -120,7 +95,7 @@ const runnable = program.pipe(
         },
         onLogs: (logs) => {
           logs.flatMap((log: any) =>
-            emit(Effect.succeed(Chunk.of(log.address)))
+            emit(Effect.succeed(Chunk.of(TransactionLog.decode(log))))
           );
         },
       });
