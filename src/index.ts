@@ -5,8 +5,9 @@
  *
  * GitHub: https://github.com/Effect-TS/effect
  */
+import { DevTools } from '@effect/experimental';
 import { NodeRuntime } from '@effect/platform-node';
-import { Effect, Stream, StreamEmit, Chunk, Sink } from 'effect';
+import { Effect, Stream, StreamEmit, Chunk } from 'effect';
 
 import { Blocks, EventLogs } from './services';
 import * as TransactionLog from './transaction-log';
@@ -17,9 +18,22 @@ import { client } from './viem-client';
  *
  * Docs - https://effect.website/docs/guides/essentials/using-generators#understanding-effectgen
  */
+
 const program = Effect.gen(function* ($) {
   const blocks = yield* Blocks;
   const logs = yield* EventLogs;
+
+  const blockListener = blocks.stream.pipe(
+    Stream.tap(Effect.log),
+    Stream.runDrain
+  );
+
+  const eventListener = logs.stream.pipe(
+    Stream.tap(({ address, args: { tokenId } }) =>
+      Effect.log(address, tokenId)
+    ),
+    Stream.runDrain
+  );
 
   /**
    * Listen for event logs
@@ -28,16 +42,8 @@ const program = Effect.gen(function* ($) {
    *
    * @todo cache https://effect.website/docs/guides/batching-caching#using-cache-directly
    */
-  const listener = logs.stream.pipe(
-    Stream.changes,
-    Stream.tap(({ address, args: { tokenId } }) =>
-      Effect.log(address, tokenId)
-    ),
-    Stream.merge(blocks.stream.pipe(Stream.tap(Effect.log))),
-    Stream.run(Sink.drain)
-  );
-
-  yield* listener;
+  yield* Effect.forkDaemon(blockListener);
+  yield* eventListener;
 });
 
 /**
@@ -103,4 +109,6 @@ const runnable = program.pipe(
   })
 );
 
-NodeRuntime.runMain(Effect.scoped(runnable));
+NodeRuntime.runMain(
+  Effect.scoped(runnable.pipe(Effect.provide(DevTools.layer())))
+);
