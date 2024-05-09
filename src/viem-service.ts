@@ -5,7 +5,6 @@ import {
   Data,
   Effect,
   Layer,
-  PubSub,
   Queue,
   Stream,
   StreamEmit,
@@ -15,7 +14,7 @@ import { createPublicClient, http, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
 
 import { ViemConfig } from "./viem-config";
-import { EventLog, EventLogPubSub } from "./event-pubsub";
+import { EventLog, EventLogPubSub, TokenMintEvent } from "./event-pubsub";
 
 export class ViemError extends Data.TaggedError("ViemError")<{
   cause: unknown;
@@ -53,7 +52,7 @@ const make = Effect.gen(function* () {
   );
 
   const watchTokenMints = Stream.async(
-    (emit: StreamEmit.Emit<never, never, any, void>) => {
+    (emit: StreamEmit.Emit<never, never, TokenMintEvent, void>) => {
       client.watchEvent({
         args: { from: "0x0000000000000000000000000000000000000000" },
         event: {
@@ -66,11 +65,14 @@ const make = Effect.gen(function* () {
           ],
         },
         onLogs: (logs) => {
-          logs.flatMap((log: any) => emit(Effect.succeed(Chunk.of(log))));
+          logs.flatMap((log: any) =>
+            emit(Effect.succeed(Chunk.of(log as TokenMintEvent)))
+          );
         },
       });
     }
   );
+
   return { client, use, watchBlockNumber, watchTokenMints } as const;
 });
 
@@ -88,7 +90,7 @@ export const ViemService = Layer.scopedDiscard(
     const viem = yield* Viem;
     const pubsub = yield* EventLogPubSub;
 
-    const dequeue = yield* pubsub.subscribeTo("TokenMints");
+    const dequeue = yield* pubsub.subscribeTo("TokenMintEvent");
 
     yield* Effect.gen(function* () {
       yield* Effect.logInfo("waiting for events");
@@ -107,18 +109,7 @@ export const ViemService = Layer.scopedDiscard(
       Stream.tap(({ address, args: { tokenId } }) =>
         Effect.log(address, tokenId)
       ),
-      Stream.map((log) =>
-        pubsub
-          .publish(
-            EventLog.TokenMints({
-              address: log.address,
-              from: log.args.from,
-              to: log.args.to,
-              tokenId: log.args.tokenId,
-            })
-          )
-          .pipe(Stream.runDrain)
-      ),
+      Stream.mapEffect((log) => pubsub.publish(EventLog.TokenMintEvent(log))),
       Stream.runDrain
     );
 

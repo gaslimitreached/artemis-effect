@@ -11,22 +11,24 @@ import {
 import { Address } from "viem";
 
 export type EventLog = Data.TaggedEnum<{
-  TokenMints: {
+  TokenMintEvent: {
     address: Address;
-    from: Address;
-    to: Address;
-    tokenId: bigint;
+    args: {
+      from: Address;
+      to: Address;
+      tokenId: bigint;
+    };
   };
 }>;
 
-export type TokenMintLog = Extract<EventLog, { _tag: "TokenMint" }>;
+export type TokenMintEvent = Extract<EventLog, { _tag: "TokenMintEvent" }>;
 
 export type EventLogType = EventLog["_tag"];
 
 export const EventLog = Data.taggedEnum<EventLog>();
 
 type EventTypeToEvent = {
-  TokenMints: TokenMintLog;
+  TokenMintEvent: TokenMintEvent;
 };
 
 export class EventLogPubSub extends Context.Tag("eventlog-pubsub")<
